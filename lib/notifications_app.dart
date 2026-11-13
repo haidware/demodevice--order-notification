@@ -10,6 +10,8 @@ const _navy = Color(0xFF13271F);
 const _green = Color(0xFF1F7051);
 const _paper = Color(0xFFF5F6F2);
 const _tokenKey = 'staff_app_access_token';
+const _pushPreferencePrefix = 'staff_app_push_enabled_';
+const _pushEndpointPrefix = 'staff_app_push_endpoint_';
 const _pollInterval = Duration(seconds: 8);
 
 class StaffNotificationsApp extends StatefulWidget {
@@ -30,6 +32,7 @@ class _StaffNotificationsAppState extends State<StaffNotificationsApp> {
   bool _loggingIn = false;
   bool _loadingNotifications = false;
   bool _pushBusy = false;
+  bool _pushEnabled = false;
   String? _error;
   String _filter = 'All';
   Set<String> _knownNotificationIds = {};
@@ -54,10 +57,14 @@ class _StaffNotificationsAppState extends State<StaffNotificationsApp> {
       final savedToken = preferences.getString(_tokenKey);
       if (savedToken != null && savedToken.isNotEmpty) {
         final staff = await _api.session(savedToken);
+        final username = staff['username']?.toString() ?? '';
         if (!mounted) return;
         setState(() {
           _token = savedToken;
           _staff = staff;
+          _pushEnabled =
+              username.isNotEmpty &&
+              (preferences.getBool(_pushPreferenceKey(username)) ?? false);
           _loading = false;
         });
         await _refreshNotifications(initial: true);
@@ -92,10 +99,13 @@ class _StaffNotificationsAppState extends State<StaffNotificationsApp> {
       }
       final preferences = await SharedPreferences.getInstance();
       await preferences.setString(_tokenKey, token);
+      final staffUsername = result['username']?.toString() ?? username;
       if (!mounted) return;
       setState(() {
         _token = token;
         _staff = result;
+        _pushEnabled =
+            preferences.getBool(_pushPreferenceKey(staffUsername)) ?? false;
         _loggingIn = false;
       });
       await _refreshNotifications(initial: true);
@@ -112,26 +122,44 @@ class _StaffNotificationsAppState extends State<StaffNotificationsApp> {
 
   Future<void> _logout() async {
     final token = _token;
+    final username = _staff?['username']?.toString() ?? '';
     _pollTimer?.cancel();
-    Object? logoutError;
+    final errors = <String>[];
+    final preferences = await SharedPreferences.getInstance();
+    final endpoint = username.isEmpty
+        ? null
+        : preferences.getString(_pushEndpointKey(username));
     if (token != null) {
+      if (endpoint != null && endpoint.isNotEmpty) {
+        try {
+          await _api.removePushSubscription(token, endpoint);
+        } catch (error) {
+          errors.add(
+            'Could not disable this device’s push subscription: ${_errorMessage(error)}',
+          );
+        }
+      }
       try {
         await _api.logout(token);
       } catch (error) {
-        logoutError = error;
+        errors.add('Server sign-out failed: ${_errorMessage(error)}');
       }
     }
-    final preferences = await SharedPreferences.getInstance();
     await preferences.remove(_tokenKey);
+    if (username.isNotEmpty) {
+      await preferences.remove(_pushPreferenceKey(username));
+      await preferences.remove(_pushEndpointKey(username));
+    }
     if (!mounted) return;
     setState(() {
       _token = null;
       _staff = null;
       _notifications = [];
       _knownNotificationIds = {};
-      _error = logoutError == null
+      _pushEnabled = false;
+      _error = errors.isEmpty
           ? null
-          : 'Signed out on this device, but server sign-out failed: ${_errorMessage(logoutError)}';
+          : 'Signed out on this device. ${errors.join(' ')}';
       _loading = false;
     });
   }
@@ -204,10 +232,20 @@ class _StaffNotificationsAppState extends State<StaffNotificationsApp> {
     });
     try {
       final subscription = await createPushSubscription(publicKey);
+      final endpoint = subscription['endpoint'];
+      final username = _staff?['username']?.toString() ?? '';
+      if (endpoint is! String || endpoint.isEmpty || username.isEmpty) {
+        throw const StaffApiException(
+          'The browser returned an incomplete push subscription.',
+        );
+      }
       await _api.savePushSubscription(token, subscription);
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.setString(_pushEndpointKey(username), endpoint);
+      await preferences.setBool(_pushPreferenceKey(username), true);
       if (mounted) {
         setState(() {
-          _staff = {...?_staff, 'push_enabled': true};
+          _pushEnabled = true;
           _error = null;
         });
         ScaffoldMessenger.of(context).showSnackBar(
@@ -259,6 +297,7 @@ class _StaffNotificationsAppState extends State<StaffNotificationsApp> {
               staff: _staff ?? const {},
               notifications: _filteredNotifications,
               totalCount: _notifications.length,
+              pushEnabled: _pushEnabled,
               filter: _filter,
               error: _error,
               loading: _loadingNotifications,
@@ -276,6 +315,11 @@ class _StaffNotificationsAppState extends State<StaffNotificationsApp> {
     final type = _filter == 'Orders' ? 'order' : 'service';
     return _notifications.where((item) => item['type'] == type).toList();
   }
+
+  String _pushPreferenceKey(String username) =>
+      '$_pushPreferencePrefix$username';
+
+  String _pushEndpointKey(String username) => '$_pushEndpointPrefix$username';
 }
 
 class _LoadingScreen extends StatelessWidget {
@@ -444,6 +488,7 @@ class _InboxScreen extends StatelessWidget {
     required this.staff,
     required this.notifications,
     required this.totalCount,
+    required this.pushEnabled,
     required this.filter,
     required this.error,
     required this.loading,
@@ -457,6 +502,7 @@ class _InboxScreen extends StatelessWidget {
   final Map<String, dynamic> staff;
   final List<Map<String, dynamic>> notifications;
   final int totalCount;
+  final bool pushEnabled;
   final String filter;
   final String? error;
   final bool loading;
@@ -468,7 +514,6 @@ class _InboxScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final pushEnabled = staff['push_enabled'] == true;
     return Scaffold(
       appBar: AppBar(
         backgroundColor: _navy,

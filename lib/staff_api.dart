@@ -69,6 +69,15 @@ class StaffApi {
     _decode(response);
   }
 
+  Future<void> removePushSubscription(String token, String endpoint) async {
+    final response = await _client.delete(
+      Uri.parse('$_baseUrl/staff/app/push-subscriptions/'),
+      headers: {..._authHeaders(token), 'Content-Type': 'application/json'},
+      body: jsonEncode({'endpoint': endpoint}),
+    );
+    _decode(response);
+  }
+
   Future<void> logout(String token) async {
     final response = await _client.post(
       Uri.parse('$_baseUrl/staff/app/logout/'),

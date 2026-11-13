@@ -73,6 +73,12 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Good to have you, Kemi'), findsOneWidget);
+    expect(
+      find.text(
+        'Get new order and service alerts, even when this app is closed.',
+      ),
+      findsOneWidget,
+    );
     expect(find.text('New Kitchen order'), findsOneWidget);
     expect(find.textContaining('Room 212'), findsOneWidget);
     expect(find.text('1 × Jollof Rice'), findsOneWidget);
